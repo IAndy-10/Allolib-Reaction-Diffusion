@@ -50,8 +50,19 @@ static const int SPHERE_LON = 600;  // must match rd_display.vert.glsl
 static const int SIM_STEPS  = 8;
 
 // ── Auto-reset timing ─────────────────────────────────────────────────────────
-// Change this value to adjust how often the simulation resets (in seconds).
 static const double AUTO_RESET_INTERVAL = 8.0;
+
+// ── Camera / audio timing ─────────────────────────────────────────────────────
+// All durations in seconds. These drive both camera movement and audio effects.
+static const float TRANSITION_FROM_OUTSIDE_TO_CENTER        = 28.f; // enter journey
+static const float REMAIN_TIME_IN_CENTER                     =  5.f; // pause at center
+static const float ROTATION_TIME                             = 15.f; // spin at center
+static const float TRANSITION_FROM_CENTER_TO_OUTSIDE         = 28.f; // exit journey
+static const float TIME_BETWEEN_CENTER_AND_SPHERE_INNER_FACE = 12.f; // 60 units / (140/28) units/s
+static const float CAMERA_DISTANCE                           = 140.f;
+static const float SLOW_ROTATION_SPEED                       = 0.08f; // rad/s (~78s per revolution)
+static const float STAGE_TWO_DURATION                        = 20.f;  // seconds of slow rotation before stage three
+static const int   STAGE_THREE_PALETTE                       = 6;     // B&W palette index (locked in stage three)
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -84,7 +95,13 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   uint32_t lastResetCount = 0;
   double   resetTimer     = 0.0;  // accumulates elapsed time on primary
 
-  float countingTime = 0.f;
+  // ── Camera / audio state machine ─────────────────────────────────────────
+  enum class CamState { ENTERING, AT_CENTER, ROTATING, EXITING, SLOW_ROTATE, STAGE_THREE };
+  CamState camState   = CamState::ENTERING;
+  float    stateTimer = 0.f;
+  float    slowAngle  = 0.f;   // accumulated angle for SLOW_ROTATE
+  int      cycleCount = 0;     // increments each time EXITING → ENTERING
+  Vec3f    entryDir   {-1.f, 0.f, 0.f};  // unit vector: side camera entered from
 
   // ── Audio ─────────────────────────────────────────────────────────────────
   SoundFilePlayerTS   player;
@@ -268,8 +285,8 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   }
 
   void onCreate() override {
-    nav().pos(-140.f, 0.f, 0.f);
-    nav().faceToward(Vec3f(0.f, 0.f, 0.f));    
+    nav().pos(entryDir * CAMERA_DISTANCE);
+    nav().faceToward(Vec3f(0.f, 0.f, 0.f));
 
     std::string dir = sourceDir3();
     simShader.compile(slurp3(dir + "/rd_sim.vert.glsl"),
@@ -306,14 +323,15 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 
   void onAnimate(double dt_) override {
     if (isPrimary()) {
-      // ── Auto-reset ─────────────────────────────────────────────────────
-      // Modify AUTO_RESET_INTERVAL at the top of the file to change timing.
-      resetTimer += dt_;
-      if (resetTimer >= AUTO_RESET_INTERVAL) {
-        resetTimer = 0.0;
-        state().resetCount++;
-        initSim(state().resetCount);
-        p_palette = (p_palette + 1) % int(palettes.size());
+      // ── Auto-reset (disabled in stage three) ───────────────────────────
+      if (camState != CamState::STAGE_THREE) {
+        resetTimer += dt_;
+        if (resetTimer >= AUTO_RESET_INTERVAL) {
+          resetTimer = 0.0;
+          state().resetCount++;
+          initSim(state().resetCount);
+          p_palette = (p_palette + 1) % int(palettes.size());
+        }
       }
 
       // ── Orbit sound source (Lissajous) ─────────────────────────────────
@@ -323,28 +341,40 @@ struct MyApp : public DistributedAppWithState<WorldState> {
                      5.f * std::sin(2.8f * tta),
                      6.f * std::sin(tta));
 
-      // ── Drum onset → palette trigger ───────────────────────────────────
-      while (nextOnsetIdx < drumOnsets.size() &&
-             playbackSec >= drumOnsets[nextOnsetIdx]) {
-        p_palette = (p_palette + 1) % int(palettes.size());
-        nextOnsetIdx++;
+      // ── Drum onset → palette trigger (disabled in stage three) ─────────
+      if (camState != CamState::STAGE_THREE) {
+        while (nextOnsetIdx < drumOnsets.size() &&
+               playbackSec >= drumOnsets[nextOnsetIdx]) {
+          p_palette = (p_palette + 1) % int(palettes.size());
+          nextOnsetIdx++;
+        }
+      } else {
+        p_palette = STAGE_THREE_PALETTE;  // lock to B&W
+        nextOnsetIdx = drumOnsets.size(); // drain the queue
       }
 
-      // ── Gain automation: linear fade-in from -40 dB → 0 dB over 30s ──
-      float gainTarget = (countingTime < 30.f)
-                       ? -20.f + 20.f * (countingTime / 30.f)
-                       : 0.f;
-      float gainSlew = std::min(1.f, float(dt_) * 5.f);
-      p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * gainSlew;
+      // ── Audio automation — driven by camera state ───────────────────────
+      // Gain
+      float gainTarget = 0.f;
+      switch (camState) {
+        case CamState::ENTERING:
+          gainTarget = -20.f + 20.f * std::min(stateTimer / TRANSITION_FROM_OUTSIDE_TO_CENTER, 1.f);
+          break;
+        case CamState::AT_CENTER:
+        case CamState::ROTATING:
+        case CamState::SLOW_ROTATE:
+        case CamState::STAGE_THREE:
+          gainTarget = 0.f;
+          break;
+        case CamState::EXITING:
+          gainTarget = -20.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
+          break;
+      }
+      p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * std::min(1.f, float(dt_) * 5.f);
 
-      // ── Filter automation ───────────────────────────────────────────────
-      //  0–15 s : 300 Hz (default)
-      // 15–30 s : 2000 Hz
-      // 30+ s   : back to 300 Hz
-      float filterTarget = (countingTime >= 15.f && countingTime < 40.f)
-                         ? 2000.f : 300.f;
-      float slew = std::min(1.f, float(dt_) * 3.f);  // ~330 ms smooth transition
-      p_filterCutoff = float(p_filterCutoff) + (filterTarget - float(p_filterCutoff)) * slew;
+      // Filter cutoff — 2000 Hz inside sphere (r<60), 300 Hz outside
+      float filterTarget = (nav().pos().mag() < 60.f) ? 2000.f : 300.f;
+      p_filterCutoff = float(p_filterCutoff) + (filterTarget - float(p_filterCutoff)) * std::min(1.f, float(dt_) * 3.f);
 
       state().camera       = nav();
       state().paletteIndex = p_palette;
@@ -354,7 +384,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       state().k            = p_k;
       state().simDt        = p_simDt;
       state().dispScale    = p_dispScale;
-    } else {@
+    } else {
       nav().set(state().camera);
 
       if (state().resetCount != lastResetCount) {
@@ -363,40 +393,98 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       }
     }
 
-    // ── Smooth camera travel in → out → repeat ───────────────────────────
-    // CAMERA_SPEED: units/second.  CAMERA_START: starting distance on X axis.
-    // Phase 0–30 s: travel inward to center.
-    // Phase 30–58 s: travel outward back to start.
-    // Resets and loops every ~58 seconds.
-    static const float CAMERA_SPEED = 5.0f;
-    static const float CAMERA_START = 140.0f;
-    static const float PHASE_IN     = 30.0f;          // seconds inward
-    static const float PHASE_CYCLE  = PHASE_IN + (CAMERA_START / CAMERA_SPEED); // ~58 s
+    // ── Camera state machine (runs on all nodes) ─────────────────────────
+    stateTimer += float(dt_);
 
-    countingTime += float(dt_);
-    if (countingTime >= PHASE_CYCLE) {
-      countingTime = 0.f;
-      nav().pos(-CAMERA_START, 0.f, 0.f);
-      nav().faceToward(Vec3f(0.f, 0.f, 0.f));
-    }
+    switch (camState) {
 
-    Vec3f pos  = nav().pos();
-    float dist = pos.mag();
-
-    if (countingTime < PHASE_IN) {
-      // Move inward toward center at constant speed.
-      if (dist > 0.01f) {
-        float move = std::min(CAMERA_SPEED * float(dt_), dist);
-        nav().pos(pos * (1.f - move / dist));
-      } else {
-        nav().pos(0.f, 0.f, 0.f);
+      case CamState::ENTERING: {
+        float t = std::min(stateTimer / TRANSITION_FROM_OUTSIDE_TO_CENTER, 1.f);
+        Vec3f pos = entryDir * CAMERA_DISTANCE * (1.f - t);
+        nav().pos(pos);
+        if (pos.mag() > 0.1f) nav().faceToward(Vec3f(0.f, 0.f, 0.f));
+        if (stateTimer >= TRANSITION_FROM_OUTSIDE_TO_CENTER) {
+          nav().pos(0.f, 0.f, 0.f);
+          stateTimer = 0.f;
+          camState = CamState::AT_CENTER;
+        }
+        break;
       }
-    } else {
-      // Move outward back to starting position, capped at CAMERA_START.
-      if (dist < CAMERA_START - 0.01f) {
-        float move = std::min(CAMERA_SPEED * float(dt_), CAMERA_START - dist);
-        nav().pos(dist > 0.01f ? pos * ((dist + move) / dist)
-                               : Vec3f(-move, 0.f, 0.f));
+
+      case CamState::AT_CENTER: {
+        nav().pos(0.f, 0.f, 0.f);
+        if (stateTimer >= REMAIN_TIME_IN_CENTER) {
+          stateTimer = 0.f;
+          if (cycleCount >= 1) {
+            // Second cycle onward: drift slowly at center indefinitely
+            slowAngle = 0.f;
+            camState  = CamState::SLOW_ROTATE;
+          } else {
+            camState = CamState::ROTATING;
+          }
+        }
+        break;
+      }
+
+      case CamState::SLOW_ROTATE: {
+        nav().pos(0.f, 0.f, 0.f);
+        slowAngle += SLOW_ROTATION_SPEED * float(dt_);
+        float cosA = std::cos(slowAngle), sinA = std::sin(slowAngle);
+        Vec3f look(entryDir.x * cosA + entryDir.z * sinA,
+                   0.f,
+                  -entryDir.x * sinA + entryDir.z * cosA);
+        nav().faceToward(look * 10.f);
+        if (stateTimer >= STAGE_TWO_DURATION) {
+          stateTimer = 0.f;
+          camState = CamState::STAGE_THREE;
+        }
+        break;
+      }
+
+      case CamState::STAGE_THREE: {
+        // Camera stays at center, continues slow rotation indefinitely
+        nav().pos(0.f, 0.f, 0.f);
+        slowAngle += SLOW_ROTATION_SPEED * float(dt_);
+        float cosA = std::cos(slowAngle), sinA = std::sin(slowAngle);
+        Vec3f look(entryDir.x * cosA + entryDir.z * sinA,
+                   0.f,
+                  -entryDir.x * sinA + entryDir.z * cosA);
+        nav().faceToward(look * 10.f);
+        // no exit — this is the final stage
+        break;
+      }
+
+      case CamState::ROTATING: {
+        nav().pos(0.f, 0.f, 0.f);
+        // Spin look direction 360° around Y over ROTATION_TIME seconds
+        float angle = float(2.0 * M_PI) * (stateTimer / ROTATION_TIME);
+        float cosA  = std::cos(angle), sinA = std::sin(angle);
+        // Rotate entryDir around world Y to produce orbiting look direction
+        Vec3f look(entryDir.x * cosA + entryDir.z * sinA,
+                   0.f,
+                  -entryDir.x * sinA + entryDir.z * cosA);
+        nav().faceToward(look * 10.f);
+        if (stateTimer >= ROTATION_TIME) {
+          stateTimer = 0.f;
+          camState = CamState::EXITING;
+        }
+        break;
+      }
+
+      case CamState::EXITING: {
+        Vec3f exitDir = -entryDir;   // opposite side from entry
+        float t = std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
+        Vec3f pos = exitDir * CAMERA_DISTANCE * t;
+        nav().pos(pos);
+        nav().faceToward(exitDir * CAMERA_DISTANCE);
+        if (stateTimer >= TRANSITION_FROM_CENTER_TO_OUTSIDE) {
+          entryDir = exitDir;  // next entry comes from this side (camera is already here)
+          nav().faceToward(Vec3f(0.f, 0.f, 0.f));
+          stateTimer = 0.f;
+          cycleCount++;
+          camState = CamState::ENTERING;
+        }
+        break;
       }
     }
   }
