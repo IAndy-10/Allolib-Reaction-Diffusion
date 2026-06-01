@@ -114,9 +114,9 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   Parameter    p_simDt       {"/simDt",       "", 0.009f, 0.001f, 0.02f};
   Parameter    p_dispScale   {"/dispScale",   "", 5.0f,   0.0f,  20.0f};
   ParameterInt p_palette     {"/palette",     "", 0,      0,     15};
-  Parameter    p_filterCutoff{"/filterCutoff","", 8000.f, 20.f,  20000.f};
-  Parameter    p_panSpeed    {"/panSpeed",    "", 0.05f,  0.01f,  0.5f};
-  Parameter    p_gainDB{"/gainDB", "", 0.0f, -40.0f, 6.0f};
+  Parameter    p_filterCutoff{"/filterCutoff","", 300.f, 20.f,  20000.f};
+  Parameter    p_panSpeed    {"/panSpeed",    "", 0.028f,  0.01f,  0.5f};
+  Parameter    p_gainDB{"/gainDB", "", -3.0f, -20.0f, 6.0f};
 
   // ── Colour palettes ──────────────────────────────────────────────────────
   // Designed for low-brightness projection: dark backgrounds, fully saturated
@@ -220,7 +220,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       gui.add(p_gainDB);
 
       // ── Open audio file ────────────────────────────────────────────────
-      std::string audioPath = sourceDir3() + "/Nala Sinephro - Continuum 1 compressed .wav";
+      std::string audioPath = sourceDir3() + "/Nala Sinephro - Continuum 1.wav";
       if (!player.open(audioPath.c_str())) {
         std::cerr << "WARNING: Could not open audio file: " << audioPath << std::endl;
       } else {
@@ -326,6 +326,22 @@ struct MyApp : public DistributedAppWithState<WorldState> {
         p_palette = (p_palette + 1) % int(palettes.size());
         nextOnsetIdx++;
       }
+
+      // ── Gain automation: linear fade-in from -40 dB → 0 dB over 30s ──
+      float gainTarget = (countingTime < 30.f)
+                       ? -20.f + 20.f * (countingTime / 30.f)
+                       : 0.f;
+      float gainSlew = std::min(1.f, float(dt_) * 5.f);
+      p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * gainSlew;
+
+      // ── Filter automation ───────────────────────────────────────────────
+      //  0–15 s : 300 Hz (default)
+      // 15–30 s : 2000 Hz
+      // 30+ s   : back to 300 Hz
+      float filterTarget = (countingTime >= 15.f && countingTime < 40.f)
+                         ? 2000.f : 300.f;
+      float slew = std::min(1.f, float(dt_) * 3.f);  // ~330 ms smooth transition
+      p_filterCutoff = float(p_filterCutoff) + (filterTarget - float(p_filterCutoff)) * slew;
 
       state().camera       = nav();
       state().paletteIndex = p_palette;
