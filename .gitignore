@@ -1,0 +1,16 @@
+# Large audio stems
+Nala Sinephro - Continuum 1.wav
+Nala Sinephro - Continuum 1 \[2026-06-01 182908\] (Bass).wav
+Nala Sinephro - Continuum 1 \[2026-06-01 182908\] (Drums).wav
+Nala Sinephro - Continuum 1 \[2026-06-01 182908\] (Others).wav
+
+# Build artifacts
+bin/
+build/
+*.o
+*.a
+*.so
+*.dylib
+
+# macOS
+.DS_Store
