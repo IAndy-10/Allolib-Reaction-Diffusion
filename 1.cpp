@@ -199,11 +199,14 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       // ── Allosphere (uncomment when deploying, remove stereo lines) ─────
       // speakerLayout = AlloSphereSpeakerLayoutCompensated();
       // spatializer   = new Lbap(speakerLayout);
-
+      if (al::sphere::isSphereMachine()) {
+        speakerLayout = AlloSphereSpeakerLayoutCompensated();
+        spatializer   = new Lbap(speakerLayout);
+      } else {
       // ── Stereo development ─────────────────────────────────────────────
       speakerLayout = StereoSpeakerLayout();
       spatializer   = new StereoPanner(speakerLayout);
-
+      }
       spatializer->compile();
 
       auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
@@ -351,7 +354,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       state().k            = p_k;
       state().simDt        = p_simDt;
       state().dispScale    = p_dispScale;
-    } else {
+    } else {@
       nav().set(state().camera);
 
       if (state().resetCount != lastResetCount) {
