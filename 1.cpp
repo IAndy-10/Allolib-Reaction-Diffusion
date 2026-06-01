@@ -220,7 +220,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       gui.add(p_gainDB);
 
       // ── Open audio file ────────────────────────────────────────────────
-      std::string audioPath = sourceDir3() + "/Nala Sinephro - Continuum 1.wav";
+      std::string audioPath = sourceDir3() + "/Nala Sinephro - Continuum 1 compressed .wav";
       if (!player.open(audioPath.c_str())) {
         std::cerr << "WARNING: Could not open audio file: " << audioPath << std::endl;
       } else {
