@@ -1,6 +1,7 @@
 /*
-  reaction-diffusion/6.cpp
-  Same as 5.cpp but with automatic simulation reset on a fixed interval.
+  italo/eoy/1.cpp
+  End-of-year performance piece: Gray-Scott reaction-diffusion on a sphere
+  with spatialized audio, drum-onset palette triggers, and a staged camera journey.
 */
 
 #include "Gamma/Filter.h"
@@ -18,7 +19,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
-#include <sstream>
 #include <vector>
 
 using namespace al;
@@ -58,7 +58,6 @@ static const float TRANSITION_FROM_OUTSIDE_TO_CENTER        = 28.f; // enter jou
 static const float REMAIN_TIME_IN_CENTER                     =  5.f; // pause at center
 static const float ROTATION_TIME                             = 15.f; // spin at center
 static const float TRANSITION_FROM_CENTER_TO_OUTSIDE         = 28.f; // exit journey
-static const float TIME_BETWEEN_CENTER_AND_SPHERE_INNER_FACE = 12.f; // 60 units / (140/28) units/s
 static const float CAMERA_DISTANCE                           = 140.f;
 static const float SLOW_ROTATION_SPEED                       = 0.08f; // rad/s (~78s per revolution)
 static const float STAGE_TWO_DURATION                        = 20.f;  // seconds of slow rotation before stage three
@@ -220,9 +219,9 @@ struct MyApp : public DistributedAppWithState<WorldState> {
         speakerLayout = AlloSphereSpeakerLayoutCompensated();
         spatializer   = new Lbap(speakerLayout);
       } else {
-      // ── Stereo development ─────────────────────────────────────────────
-      speakerLayout = StereoSpeakerLayout();
-      spatializer   = new StereoPanner(speakerLayout);
+        // ── Stereo development ─────────────────────────────────────────────
+        speakerLayout = StereoSpeakerLayout();
+        spatializer   = new StereoPanner(speakerLayout);
       }
       spatializer->compile();
 
@@ -281,7 +280,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     spatializer->finalize(io);
 
     samplePos  += frames;
-    playbackSec = double(samplePos) / 44100.0;
+    playbackSec = double(samplePos) / double(player.soundFile.sampleRate);
   }
 
   void onCreate() override {
