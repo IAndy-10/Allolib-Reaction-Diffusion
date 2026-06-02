@@ -7,6 +7,10 @@
 #include "Gamma/Filter.h"
 #include "al/app/al_DistributedApp.hpp"
 #include "al/app/al_GUIDomain.hpp"
+#include "al/graphics/al_FBO.hpp"
+#include "al/graphics/al_VAOMesh.hpp"
+#include "al/graphics/al_Shader.hpp"
+#include "al/graphics/al_BufferObject.hpp"
 #include "al/graphics/al_Texture.hpp"
 #include "al/math/al_Random.hpp"
 #include "al/sound/al_SoundFile.hpp"
@@ -82,12 +86,12 @@ struct WorldState {
 struct MyApp : public DistributedAppWithState<WorldState> {
   // ── Simulation textures (ping-pong) ──────────────────────────────────────
   Texture texA, texB;
-  GLuint  fboA = 0, fboB = 0;
+  FBO     fboA, fboB;
   bool    pingA = true;
 
   // ── GPU meshes & shaders ─────────────────────────────────────────────────
-  GLuint        emptyVAO = 0;
-  Mesh          gridMesh;
+  VAOMesh          triMesh;
+  VAOMesh          gridMesh;
   ShaderProgram simShader;
   ShaderProgram dispShader;
 
@@ -303,23 +307,23 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       t->create2D(SIM_W, SIM_H, Texture::RGBA32F, Texture::RGBA, Texture::FLOAT);
     }
 
-    glGenFramebuffers(1, &fboA);
-    glBindFramebuffer(GL_FRAMEBUFFER, fboA);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, texA.id(), 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    fboA.bind();
+    fboA.attachTexture2D(texA);
+    fboA.unbind();
 
-    glGenFramebuffers(1, &fboB);
-    glBindFramebuffer(GL_FRAMEBUFFER, fboB);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, texB.id(), 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    fboB.bind();
+    fboB.attachTexture2D(texB);
+    fboB.unbind();
 
-    glGenVertexArrays(1, &emptyVAO);
+    triMesh.primitive(Mesh::TRIANGLES);
+    triMesh.vertex(-1.f, -1.f, 0.f); triMesh.texCoord(0.f, 0.f);
+    triMesh.vertex( 3.f, -1.f, 0.f); triMesh.texCoord(2.f, 0.f);
+    triMesh.vertex(-1.f,  3.f, 0.f); triMesh.texCoord(0.f, 2.f);
+    triMesh.update();
 
     gridMesh.primitive(Mesh::TRIANGLES);
     for (int i = 0; i < SPHERE_LAT * SPHERE_LON * 6; i++) gridMesh.vertex(0, 0, 0);
-    // al_Shapes.hpp  look for addTexSphere(gridMesh)
+    gridMesh.update();
 
     initSim(0);
   }
@@ -500,43 +504,32 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     float dt        = state().simDt;
     float dispScale = state().dispScale;
 
-    // ── Save GL state ────────────────────────────────────────────────────
-    //GLint prevFBO;
-    //glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-    //GLint vp[4];
-    //glGetIntegerv(GL_VIEWPORT, vp);
-
     g.pushFramebuffer();
     g.pushViewport();
 
     // ── Ping-pong simulation ─────────────────────────────────────────────
-    glViewport(0, 0, SIM_W, SIM_H);
+    g.viewport(0, 0, SIM_W, SIM_H);
     for (int i = 0; i < SIM_STEPS; i++) {
       Texture& src    = pingA ? texA : texB;
-      GLuint   dstFBO = pingA ? fboB : fboA;
+      FBO&     dst = pingA ? fboB : fboA;
 
-      glBindFramebuffer(GL_FRAMEBUFFER, dstFBO);
-      simShader.begin();
+      dst.bind();
       src.bind(0);
-      simShader.uniform("u_texture",    0);
-      simShader.uniform("u_resolution", float(SIM_W), float(SIM_H));
-      simShader.uniform("u_dA",   dA);
-      simShader.uniform("u_dB",   dB);
-      simShader.uniform("u_feed", feed);
-      simShader.uniform("u_k",    k);
-      simShader.uniform("u_dt",   dt);
-      glBindVertexArray(emptyVAO);
-      glDrawArrays(GL_TRIANGLES, 0, 3);
-      glBindVertexArray(0);
+      g.shader(simShader);
+      g.shader().uniform("u_texture",    0);
+      g.shader().uniform("u_resolution", float(SIM_W), float(SIM_H));
+      g.shader().uniform("u_dA",   dA);
+      g.shader().uniform("u_dB",   dB);
+      g.shader().uniform("u_feed", feed);
+      g.shader().uniform("u_k",    k);
+      g.shader().uniform("u_dt",   dt);
+      g.draw(triMesh);
       src.unbind(0);
-      simShader.end();
+      dst.unbind();
 
       pingA = !pingA;
     }
 
-    // ── Restore window framebuffer ───────────────────────────────────────
-    //glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
-    //glViewport(vp[0], vp[1], vp[2], vp[3]);
     g.popViewport();
     g.popFramebuffer();
 

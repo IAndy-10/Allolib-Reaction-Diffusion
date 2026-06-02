@@ -1,21 +1,15 @@
 #version 330 core
 
-// Full-screen triangle: 3 dummy vertices, positions computed from gl_VertexID.
-// Covers the entire NDC square [-1,1]x[-1,1] with correct UVs [0,1]x[0,1].
+// Full-screen triangle using AlloLib's standard attribute layout:
+//   location 0 = position (vec3)
+//   location 2 = texcoord (vec2)
+
+layout (location = 0) in vec3 position;
+layout (location = 2) in vec2 texcoord;
 
 out vec2 v_uv;
 
 void main() {
-    const vec2 pos[3] = vec2[3](
-        vec2(-1.0, -1.0),
-        vec2( 3.0, -1.0),
-        vec2(-1.0,  3.0)
-    );
-    const vec2 uvs[3] = vec2[3](
-        vec2(0.0, 0.0),
-        vec2(2.0, 0.0),
-        vec2(0.0, 2.0)
-    );
-    v_uv        = uvs[gl_VertexID];
-    gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
+    v_uv        = texcoord;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
 }
