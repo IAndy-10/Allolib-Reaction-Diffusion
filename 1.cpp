@@ -47,7 +47,7 @@ static const int SIM_W      = 512;
 static const int SIM_H      = 512;
 static const int SPHERE_LAT = 300;  // must match rd_display.vert.glsl
 static const int SPHERE_LON = 600;  // must match rd_display.vert.glsl
-static const int SIM_STEPS  = 8;
+static const int SIM_STEPS  = 4;
 
 // ── Auto-reset timing ─────────────────────────────────────────────────────────
 static const double AUTO_RESET_INTERVAL = 8.0;
@@ -255,8 +255,10 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   void onSound(AudioIOData& io) override {
     if (!isPrimary()) return;
 
-    int frames   = io.framesPerBuffer();
     int channels = player.soundFile.channels;
+    if (channels <= 0) return;  // audio file not loaded — avoid OOB access
+
+    int frames = io.framesPerBuffer();
     audioBuffer.resize(frames * channels);
     player.getFrames(frames, audioBuffer.data(), audioBuffer.size());
 
@@ -280,7 +282,8 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     spatializer->finalize(io);
 
     samplePos  += frames;
-    playbackSec = double(samplePos) / double(player.soundFile.sampleRate);
+    int sr = player.soundFile.sampleRate;
+    playbackSec = (sr > 0) ? double(samplePos) / double(sr) : 0.0;
   }
 
   void onCreate() override {
