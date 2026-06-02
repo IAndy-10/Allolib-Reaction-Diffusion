@@ -395,20 +395,20 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       // ── Orbit sound sources ────────────────────────────────────────────
       mSoundElapsedTime += dt_;
       float tta = float(mSoundElapsedTime * p_panSpeed * 2.0 * M_PI);
-      // Others: Lissajous figure — complex 3D orbit
-      srcPosOthers = Vec3f(2.f * std::cos(tta),
-                           1.2f * std::sin(1.8f * tta),
-                           2.f * std::sin(tta));
-      // Bass: slow wide horizontal circle, slightly below center
+      // Others: Lissajous figure — complex 3D orbit, normalized to unit sphere
+      srcPosOthers = Vec3f(std::cos(tta),
+                           0.6f * std::sin(1.8f * tta),
+                           std::sin(tta)).normalize();
+      // Bass: slow wide horizontal circle, slightly below center, normalized to unit sphere
       float ttb = float(mSoundElapsedTime * p_panSpeed * 0.3 * M_PI);
-      srcPosBass = Vec3f(3.f * std::cos(ttb), 
-                         -1.2f, 
-                         3.f * std::sin(ttb));
-      // Drums: faster asymmetric figure-8, stays more frontal
-      float ttd = float(mSoundElapsedTime * p_panSpeed * 2.0 * M_PI);
-      srcPosDrums = Vec3f(1.2f * std::cos(ttd), 
-                          1.5f * std::sin(2.f * ttd), 
-                          2.1f * std::sin(ttd));
+      srcPosBass = Vec3f(std::cos(ttb),
+                         -0.4f,
+                         std::sin(ttb)).normalize();
+      // Drums: faster asymmetric figure-8, stays more frontal, normalized to unit sphere
+      float ttd = float(mSoundElapsedTime * p_panSpeed * 4.0 * M_PI);
+      srcPosDrums = Vec3f(std::cos(ttd),
+                          0.75f * std::sin(2.f * ttd),
+                          std::sin(ttd)).normalize();
 
       // ── Drum onset → palette trigger (disabled in stage three+four) ────
       if (camState != CamState::STAGE_THREE && camState != CamState::STAGE_FOUR) {
