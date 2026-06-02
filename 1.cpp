@@ -319,6 +319,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 
     gridMesh.primitive(Mesh::TRIANGLES);
     for (int i = 0; i < SPHERE_LAT * SPHERE_LON * 6; i++) gridMesh.vertex(0, 0, 0);
+    // al_Shapes.hpp  look for addTexSphere(gridMesh)
 
     initSim(0);
   }
@@ -500,10 +501,13 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     float dispScale = state().dispScale;
 
     // ── Save GL state ────────────────────────────────────────────────────
-    GLint prevFBO;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-    GLint vp[4];
-    glGetIntegerv(GL_VIEWPORT, vp);
+    //GLint prevFBO;
+    //glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    //GLint vp[4];
+    //glGetIntegerv(GL_VIEWPORT, vp);
+
+    g.pushFramebuffer();
+    g.pushViewport();
 
     // ── Ping-pong simulation ─────────────────────────────────────────────
     glViewport(0, 0, SIM_W, SIM_H);
@@ -531,8 +535,10 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     }
 
     // ── Restore window framebuffer ───────────────────────────────────────
-    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
-    glViewport(vp[0], vp[1], vp[2], vp[3]);
+    //glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    //glViewport(vp[0], vp[1], vp[2], vp[3]);
+    g.popViewport();
+    g.popFramebuffer();
 
     // ── Display pass ─────────────────────────────────────────────────────
     g.clear(0.f, 0.f, 0.f);
