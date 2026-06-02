@@ -63,7 +63,7 @@ static const float REMAIN_TIME_IN_CENTER                     =  5.f; // pause at
 static const float ROTATION_TIME                             = 15.f; // spin at center
 static const float TRANSITION_FROM_CENTER_TO_OUTSIDE         = 28.f; // exit journey
 static const float CAMERA_DISTANCE                           = 140.f;
-static const float SLOW_ROTATION_SPEED                       = 0.08f; // rad/s (~78s per revolution)
+static const float SLOW_ROTATION_SPEED                       = 0.02f; // rad/s (~78s per revolution)
 static const float STAGE_TWO_DURATION                        = 20.f;  // seconds of slow rotation before stage three
 static const int   STAGE_THREE_PALETTE                       = 6;     // B&W palette index (locked in stage three)
 
@@ -136,7 +136,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   ParameterInt p_palette     {"/palette",     "", 0,      0,     15};
   Parameter    p_filterCutoff{"/filterCutoff","", 300.f, 20.f,  20000.f};
   Parameter    p_panSpeed    {"/panSpeed",    "", 0.028f,  0.01f,  0.5f};
-  Parameter    p_gainDB{"/gainDB", "", -3.0f, -20.0f, 6.0f};
+  Parameter    p_gainDB{"/gainDB", "", -3.0f, -6.0f, 12.0f};
 
   // ── Colour palettes ──────────────────────────────────────────────────────
   // Designed for low-brightness projection: dark backgrounds, fully saturated
@@ -365,16 +365,16 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       float gainTarget = 0.f;
       switch (camState) {
         case CamState::ENTERING:
-          gainTarget = -20.f + 20.f * std::min(stateTimer / TRANSITION_FROM_OUTSIDE_TO_CENTER, 1.f);
+          gainTarget = -6.f + 18.f * std::min(stateTimer / TRANSITION_FROM_OUTSIDE_TO_CENTER, 1.f);
           break;
         case CamState::AT_CENTER:
         case CamState::ROTATING:
         case CamState::SLOW_ROTATE:
         case CamState::STAGE_THREE:
-          gainTarget = 0.f;
+          gainTarget = 12.f;
           break;
         case CamState::EXITING:
-          gainTarget = -20.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
+          gainTarget = 12.f - 18.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
           break;
       }
       p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * std::min(1.f, float(dt_) * 5.f);
@@ -549,6 +549,8 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     g.shader().uniform("u_colorB",    pal.b);
     g.shader().uniform("u_colorBg",   pal.bg);
     g.shader().uniform("u_dispScale", dispScale);
+    g.shader().uniform("u_eyeSep", lens().eyeSep() * g.eye() * 0.5f);
+    g.shader().uniform("u_focLen", lens().focalLength());
     g.draw(gridMesh);
     rdTex.unbind(0);
   }
@@ -572,7 +574,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 
 int main() {
   MyApp app;
-  app.configureAudio(44100, 512, 2, 0);
+  app.configureAudio(44100, 512, 60, 0);
   gam::sampleRate(44100);
   app.start();
 }

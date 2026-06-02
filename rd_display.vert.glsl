@@ -9,6 +9,8 @@ uniform mat4 al_ModelViewMatrix;
 uniform mat4 al_ProjectionMatrix;
 uniform sampler2D u_texture;   // RD state: R=A, G=B
 uniform float     u_dispScale; // inward radial displacement scale
+uniform float u_eyeSep;
+uniform float u_focLen;
 
 const int   SPHERE_LAT = 300;
 const int   SPHERE_LON = 600;
@@ -16,6 +18,23 @@ const float PI         = 3.14159265358979323846;
 const float RADIUS     = 60.0;
 
 out vec2 v_uv;
+
+vec4 stereo_displace(vec4 v, float e, float f) {
+  // eye to vertex distance
+  float l = sqrt((v.x - e) * (v.x - e) + v.y * v.y + v.z * v.z);
+  // absolute z-direction distance
+  float z = abs(v.z);
+  // x coord of projection of vertex on focal plane when looked from eye
+  float t = f * (v.x - e) / z;
+  // x coord of displaced vertex to make displaced vertex be projected on focal plane
+  // when looked from origin at the same point original vertex would be projected
+  // when looked form eye
+  v.x = z * (e + t) / f;
+  // set distance from origin to displaced vertex same as eye to original vertex
+  v.xyz = normalize(v.xyz);
+  v.xyz *= l;
+  return v;
+}
 
 void main() {
     int quadId  = gl_VertexID / 6;
@@ -45,5 +64,6 @@ void main() {
     float r = RADIUS - b * u_dispScale;
 
     vec3 worldPos = dir * r;
-    gl_Position = al_ProjectionMatrix * al_ModelViewMatrix * vec4(worldPos, 1.0);
+    vec4 pos =  al_ModelViewMatrix * vec4(worldPos, 1.0);
+    gl_Position = al_ProjectionMatrix * stereo_displace(pos, u_eyeSep, u_focLen);
 }
