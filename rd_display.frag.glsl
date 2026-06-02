@@ -13,6 +13,7 @@ uniform vec3      u_colorBg;   // background / equilibrium color
 uniform float     u_dispScale; // passed through (used in vert shader)
 uniform float     u_blur;      // texel-offset scale for blur (0 = sharp)
 uniform float     u_brightness;// overexposure multiplier (1 = normal)
+uniform float     u_whiteFade; // 0=normal, 1=pure white (last 3s of stage four)
 
 vec3 rdColor(vec2 uv) {
     vec2  st   = texture(u_texture, uv).rg;
@@ -57,5 +58,6 @@ void main() {
         color = rdColor(v_uv);
     }
 
-    fragColor = vec4(clamp(color * u_brightness, 0.0, 1.0), 1.0);
+    vec3 bright = clamp(color * u_brightness, 0.0, 1.0);
+    fragColor = vec4(mix(bright, vec3(1.0), u_whiteFade), 1.0);
 }

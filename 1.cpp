@@ -67,7 +67,7 @@ static const float SLOW_ROTATION_SPEED                       = 0.02f; // rad/s (
 static const float STAGE_TWO_DURATION                        = 20.f;  // seconds of slow rotation before stage three
 static const int   STAGE_THREE_PALETTE                       = 6;     // B&W palette index (locked in stage three)
 static const float STAGE_THREE_DURATION                      = 20.f;  // how long stage three lasts before stage four
-static const float STAGE_FOUR_DURATION                       = 30.f;  // seconds from stage four start to full white
+static const float STAGE_FOUR_DURATION                       = 40.f;  // seconds from stage four start to full white
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -111,19 +111,22 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   Vec3f    entryDir   {-1.f, 0.f, 0.f};  // unit vector: side camera entered from
 
   // ── Audio ─────────────────────────────────────────────────────────────────
-  SoundFilePlayerTS   player;
-  std::vector<float>  audioBuffer;
-  uint64_t            samplePos   = 0;   // tracks playback position
+  SoundFilePlayerTS   playerOthers, playerBass, playerDrums;
+  std::vector<float>  bufOthers, bufBass, bufDrums;
+  uint64_t            samplePos   = 0;
   double              playbackSec = 0.0;
 
-  // ── DSP: filter + spatializer ────────────────────────────────────────────
-  gam::Biquad<> filterL;              // low-pass filter, left channel
-  gam::Biquad<> filterR;              // low-pass filter, right channel
+  // ── DSP: filters per stem ────────────────────────────────────────────────
+  gam::Biquad<> filterOthersL, filterOthersR;
+  gam::Biquad<> filterBassL,   filterBassR;
+  gam::Biquad<> filterDrumsL,  filterDrumsR;
 
   Speakers     speakerLayout;
   Spatializer* spatializer{nullptr};
-  double       mSoundElapsedTime{0.0};  // drives the source orbit
-  Vec3f        srcPos{0.f, 0.f, 0.f};  // current 3D source position
+  double       mSoundElapsedTime{0.0};
+  Vec3f        srcPosOthers{0.f, 0.f, 0.f};  // Lissajous orbit
+  Vec3f        srcPosBass  {0.f, 0.f, 0.f};  // slow horizontal circle, low
+  Vec3f        srcPosDrums {0.f, 0.f, 0.f};  // faster asymmetric orbit
 
   // ── Drum onsets ───────────────────────────────────────────────────────────
   std::vector<double> drumOnsets;
@@ -218,7 +221,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 
     if (isPrimary()) {
       // ── Spatializer setup ──────────────────────────────────────────────
-      audioIO().channelsBus(1);
+      audioIO().channelsBus(3);  // bus 0=others, 1=bass, 2=drums
 
       // ── Allosphere (uncomment when deploying, remove stereo lines) ─────
       // speakerLayout = AlloSphereSpeakerLayoutCompensated();
@@ -250,16 +253,17 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       std::string audioPathBass = sourceDir3() + "/Nala Sinephro - Continuum 1 [2026-06-01 182908] (Bass).wav";
       std::string audioPathDrums = sourceDir3() + "/Nala Sinephro - Continuum 1 [2026-06-01 182908] (Drums).wav";
       std::string audioPathOthers = sourceDir3() + "/Nala Sinephro - Continuum 1 [2026-06-01 182908] (Others).wav";
-      if (!player.open(audioPathOthers.c_str()) && 
-          !player.open(audioPathBass.c_str()) &&
-          !player.open(audioPathDrums.c_str())) {
-        std::cerr << "WARNING: Could not open audio file: " << audioPathOthers << std::endl;
-
-      } else {
-        player.setLoop();
-        player.setPlay();
-        
-      }
+      auto openPlayer = [](SoundFilePlayerTS& p, const std::string& path) {
+        if (!p.open(path.c_str())) {
+          std::cerr << "WARNING: Could not open audio: " << path << std::endl;
+          return;
+        }
+        p.setLoop();
+        p.setPlay();
+      };
+      openPlayer(playerOthers, audioPathOthers);
+      openPlayer(playerBass,   audioPathBass);
+      openPlayer(playerDrums,  audioPathDrums);
 
       loadDrumOnsets(sourceDir3() + "/drums_onsets.csv");
     }
@@ -268,34 +272,72 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   void onSound(AudioIOData& io) override {
     if (!isPrimary()) return;
 
-    int channels = player.soundFile.channels;
-    if (channels <= 0) return;  // audio file not loaded — avoid OOB access
-
     int frames = io.framesPerBuffer();
-    audioBuffer.resize(frames * channels);
-    player.getFrames(frames, audioBuffer.data(), audioBuffer.size());
+    float gain = std::pow(10.f, float(p_gainDB) / 20.f);
 
-    // Update filter cutoff from parameter
-    filterL.freq(p_filterCutoff);
-    filterR.freq(p_filterCutoff);
+    // Update filter cutoffs
+    filterOthersL.freq(p_filterCutoff); filterOthersR.freq(p_filterCutoff);
+    filterBassL.freq(p_filterCutoff);   filterBassR.freq(p_filterCutoff);
+    filterDrumsL.freq(p_filterCutoff);  filterDrumsR.freq(p_filterCutoff);
 
-    // Fill bus(0) with filtered mono signal, scaled by dB gain
-    float gain = std::pow(10.f, p_gainDB / 20.f);
-    while (io()) {
-      int   i    = io.frame() * channels;
-      float rawL = audioBuffer[i];
-      float rawR = (channels > 1) ? audioBuffer[i + 1] : rawL;
-      float mono = (filterL(rawL) + filterR(rawR)) * 0.5f * gain;
-      io.bus(0)  = mono;
+    // Drums are silenced in STAGE_FOUR (stageProgress > 0)
+    float drumsGain = (stageProgress > 0.f) ? std::max(0.f, 1.f - stageProgress * 10.f) : 1.f;
+
+    // Last 5s of STAGE_FOUR (stageProgress >= 0.875): fade all audio to silence
+    float endFade = std::min(1.f, std::max(0.f, 1.f - (stageProgress - 0.875f) / 0.125f));
+    gain *= endFade;
+
+    // ── Others → bus 0 ───────────────────────────────────────────────────
+    int chO = playerOthers.soundFile.channels;
+    if (chO > 0) {
+      bufOthers.resize(frames * chO);
+      playerOthers.getFrames(frames, bufOthers.data(), bufOthers.size());
+      io.frame(0);
+      while (io()) {
+        int   i = io.frame() * chO;
+        float l = bufOthers[i];
+        float r = (chO > 1) ? bufOthers[i + 1] : l;
+        io.bus(0) = (filterOthersL(l) + filterOthersR(r)) * 0.5f * gain;
+      }
     }
 
-    // Spatialize the bus buffer to output channels
+    // ── Bass → bus 1 ─────────────────────────────────────────────────────
+    int chB = playerBass.soundFile.channels;
+    if (chB > 0) {
+      bufBass.resize(frames * chB);
+      playerBass.getFrames(frames, bufBass.data(), bufBass.size());
+      io.frame(0);
+      while (io()) {
+        int   i = io.frame() * chB;
+        float l = bufBass[i];
+        float r = (chB > 1) ? bufBass[i + 1] : l;
+        io.bus(1) = (filterBassL(l) + filterBassR(r)) * 0.5f * gain;
+      }
+    }
+
+    // ── Drums → bus 2 (silenced in stage four) ───────────────────────────
+    int chD = playerDrums.soundFile.channels;
+    if (chD > 0) {
+      bufDrums.resize(frames * chD);
+      playerDrums.getFrames(frames, bufDrums.data(), bufDrums.size());
+      io.frame(0);
+      while (io()) {
+        int   i = io.frame() * chD;
+        float l = bufDrums[i];
+        float r = (chD > 1) ? bufDrums[i + 1] : l;
+        io.bus(2) = (filterDrumsL(l) + filterDrumsR(r)) * 0.5f * gain * drumsGain;
+      }
+    }
+
+    // ── Spatialize each stem independently ───────────────────────────────
     spatializer->prepare(io);
-    spatializer->renderBuffer(io, srcPos, io.busBuffer(0), frames);
+    spatializer->renderBuffer(io, srcPosOthers, io.busBuffer(0), frames);
+    spatializer->renderBuffer(io, srcPosBass,   io.busBuffer(1), frames);
+    spatializer->renderBuffer(io, srcPosDrums,  io.busBuffer(2), frames);
     spatializer->finalize(io);
 
-    samplePos  += frames;
-    int sr = player.soundFile.sampleRate;
+    samplePos += frames;
+    int sr = playerOthers.soundFile.sampleRate;
     playbackSec = (sr > 0) ? double(samplePos) / double(sr) : 0.0;
   }
 
@@ -350,12 +392,19 @@ struct MyApp : public DistributedAppWithState<WorldState> {
         }
       }
 
-      // ── Orbit sound source (Lissajous) ─────────────────────────────────
+      // ── Orbit sound sources ────────────────────────────────────────────
       mSoundElapsedTime += dt_;
       float tta = float(mSoundElapsedTime * p_panSpeed * 2.0 * M_PI);
-      srcPos = Vec3f(6.f * std::cos(tta),
-                     5.f * std::sin(2.8f * tta),
-                     6.f * std::sin(tta));
+      // Others: Lissajous figure — complex 3D orbit
+      srcPosOthers = Vec3f(6.f * std::cos(tta),
+                           5.f * std::sin(2.8f * tta),
+                           6.f * std::sin(tta));
+      // Bass: slow wide horizontal circle, slightly below center
+      float ttb = float(mSoundElapsedTime * p_panSpeed * 0.3 * M_PI);
+      srcPosBass = Vec3f(9.f * std::cos(ttb), -2.f, 9.f * std::sin(ttb));
+      // Drums: faster asymmetric figure-8, stays more frontal
+      float ttd = float(mSoundElapsedTime * p_panSpeed * 4.0 * M_PI);
+      srcPosDrums = Vec3f(4.f * std::cos(ttd), 1.5f * std::sin(2.f * ttd), 3.f * std::sin(ttd));
 
       // ── Drum onset → palette trigger (disabled in stage three+four) ────
       if (camState != CamState::STAGE_THREE && camState != CamState::STAGE_FOUR) {
@@ -386,7 +435,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
           gainTarget = 6.f - 12.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
           break;
         case CamState::STAGE_FOUR:
-          gainTarget = 6.f - 66.f * stageProgress;  // 6 dB → -60 dB
+          //gainTarget = 6.f - 66.f * stageProgress;  // 6 dB → -60 dB
           break;
       }
       p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * std::min(1.f, float(dt_) * 5.f);
@@ -600,6 +649,8 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     g.shader().uniform("u_focLen",     lens().focalLength());
     g.shader().uniform("u_blur",       stageProgress * 0.012f);
     g.shader().uniform("u_brightness", 1.f + stageProgress * stageProgress * 20.f);
+    float whiteFade = std::min(1.f, std::max(0.f, (stageProgress - 0.875f) / 0.125f));
+    g.shader().uniform("u_whiteFade",  whiteFade);
     g.draw(gridMesh);
     rdTex.unbind(0);
   }
