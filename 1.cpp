@@ -396,15 +396,19 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       mSoundElapsedTime += dt_;
       float tta = float(mSoundElapsedTime * p_panSpeed * 2.0 * M_PI);
       // Others: Lissajous figure — complex 3D orbit
-      srcPosOthers = Vec3f(6.f * std::cos(tta),
-                           5.f * std::sin(2.8f * tta),
-                           6.f * std::sin(tta));
+      srcPosOthers = Vec3f(2.f * std::cos(tta),
+                           1.2f * std::sin(1.8f * tta),
+                           2.f * std::sin(tta));
       // Bass: slow wide horizontal circle, slightly below center
       float ttb = float(mSoundElapsedTime * p_panSpeed * 0.3 * M_PI);
-      srcPosBass = Vec3f(9.f * std::cos(ttb), -2.f, 9.f * std::sin(ttb));
+      srcPosBass = Vec3f(3.f * std::cos(ttb), 
+                         -1.2f, 
+                         3.f * std::sin(ttb));
       // Drums: faster asymmetric figure-8, stays more frontal
-      float ttd = float(mSoundElapsedTime * p_panSpeed * 4.0 * M_PI);
-      srcPosDrums = Vec3f(4.f * std::cos(ttd), 1.5f * std::sin(2.f * ttd), 3.f * std::sin(ttd));
+      float ttd = float(mSoundElapsedTime * p_panSpeed * 2.0 * M_PI);
+      srcPosDrums = Vec3f(1.2f * std::cos(ttd), 
+                          1.5f * std::sin(2.f * ttd), 
+                          2.1f * std::sin(ttd));
 
       // ── Drum onset → palette trigger (disabled in stage three+four) ────
       if (camState != CamState::STAGE_THREE && camState != CamState::STAGE_FOUR) {
