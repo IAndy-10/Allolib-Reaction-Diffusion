@@ -342,7 +342,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   }
 
   void onCreate() override {
-    lens().near(0.2).far(100).focalLength(6).eyeSep(0.03);
+    lens().near(0.2).far(100).focalLength(6).eyeSep(0.0);
     nav().pos(entryDir * CAMERA_DISTANCE);
     nav().faceToward(Vec3f(0.f, 0.f, 0.f));
 
