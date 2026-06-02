@@ -691,10 +691,10 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 int main() {
   MyApp app;
   // Allosphere
-  //app.configureAudio(44100, 512, 60, 0);
+  app.configureAudio(44100, 512, 60, 0);
   
   // Stereo
-  app.configureAudio(44100, 512, 2, 0);
+  //app.configureAudio(44100, 512, 2, 0);
 
   gam::sampleRate(44100);
   app.start();
