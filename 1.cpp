@@ -60,12 +60,14 @@ static const double AUTO_RESET_INTERVAL = 8.0;
 // All durations in seconds. These drive both camera movement and audio effects.
 static const float TRANSITION_FROM_OUTSIDE_TO_CENTER        = 28.f; // enter journey
 static const float REMAIN_TIME_IN_CENTER                     =  5.f; // pause at center
-static const float ROTATION_TIME                             = 15.f; // spin at center
+static const float ROTATION_TIME                             = 45.f; // spin at center
 static const float TRANSITION_FROM_CENTER_TO_OUTSIDE         = 28.f; // exit journey
 static const float CAMERA_DISTANCE                           = 140.f;
 static const float SLOW_ROTATION_SPEED                       = 0.02f; // rad/s (~78s per revolution)
 static const float STAGE_TWO_DURATION                        = 20.f;  // seconds of slow rotation before stage three
 static const int   STAGE_THREE_PALETTE                       = 6;     // B&W palette index (locked in stage three)
+static const float STAGE_THREE_DURATION                      = 20.f;  // how long stage three lasts before stage four
+static const float STAGE_FOUR_DURATION                       = 30.f;  // seconds from stage four start to full white
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -79,6 +81,7 @@ struct WorldState {
   float    k            = 0.062f;
   float    simDt        = 0.009f;
   float    dispScale    = 5.0f;
+  float    stageProgress = 0.f;
 };
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -94,12 +97,13 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   VAOMesh          gridMesh;
   ShaderProgram simShader;
   ShaderProgram dispShader;
+  float         stageProgress = 0.f;
 
   uint32_t lastResetCount = 0;
   double   resetTimer     = 0.0;  // accumulates elapsed time on primary
 
   // ── Camera / audio state machine ─────────────────────────────────────────
-  enum class CamState { ENTERING, AT_CENTER, ROTATING, EXITING, SLOW_ROTATE, STAGE_THREE };
+  enum class CamState { ENTERING, AT_CENTER, ROTATING, EXITING, SLOW_ROTATE, STAGE_THREE, STAGE_FOUR };
   CamState camState   = CamState::ENTERING;
   float    stateTimer = 0.f;
   float    slowAngle  = 0.f;   // accumulated angle for SLOW_ROTATE
@@ -132,11 +136,11 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   Parameter    p_feed        {"/feed",        "", 0.055f, 0.01f,  0.1f};
   Parameter    p_k           {"/k",           "", 0.062f, 0.01f,  0.1f};
   Parameter    p_simDt       {"/simDt",       "", 0.009f, 0.001f, 0.02f};
-  Parameter    p_dispScale   {"/dispScale",   "", 5.0f,   0.0f,  20.0f};
+  Parameter    p_dispScale   {"/dispScale",   "", 2.0f,   0.0f,  20.0f};
   ParameterInt p_palette     {"/palette",     "", 0,      0,     15};
   Parameter    p_filterCutoff{"/filterCutoff","", 300.f, 20.f,  20000.f};
   Parameter    p_panSpeed    {"/panSpeed",    "", 0.028f,  0.01f,  0.5f};
-  Parameter    p_gainDB{"/gainDB", "", -3.0f, -6.0f, 12.0f};
+  Parameter    p_gainDB      {"/gainDB", "", -3.0f, -60.0f, 6.0f};
 
   // ── Colour palettes ──────────────────────────────────────────────────────
   // Designed for low-brightness projection: dark backgrounds, fully saturated
@@ -243,9 +247,14 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       gui.add(p_gainDB);
 
       // ── Open audio file ────────────────────────────────────────────────
-      std::string audioPath = sourceDir3() + "/Nala Sinephro - Continuum 1.wav";
-      if (!player.open(audioPath.c_str())) {
-        std::cerr << "WARNING: Could not open audio file: " << audioPath << std::endl;
+      std::string audioPathBass = sourceDir3() + "/Nala Sinephro - Continuum 1 [2026-06-01 182908] (Bass).wav";
+      std::string audioPathDrums = sourceDir3() + "/Nala Sinephro - Continuum 1 [2026-06-01 182908] (Drums).wav";
+      std::string audioPathOthers = sourceDir3() + "/Nala Sinephro - Continuum 1 [2026-06-01 182908] (Others).wav";
+      if (!player.open(audioPathOthers.c_str()) && 
+          !player.open(audioPathBass.c_str()) &&
+          !player.open(audioPathDrums.c_str())) {
+        std::cerr << "WARNING: Could not open audio file: " << audioPathOthers << std::endl;
+
       } else {
         player.setLoop();
         player.setPlay();
@@ -291,6 +300,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
   }
 
   void onCreate() override {
+    lens().near(0.2).far(100).focalLength(6).eyeSep(0.03);
     nav().pos(entryDir * CAMERA_DISTANCE);
     nav().faceToward(Vec3f(0.f, 0.f, 0.f));
 
@@ -299,7 +309,6 @@ struct MyApp : public DistributedAppWithState<WorldState> {
                       slurp3(dir + "/rd_sim.frag.glsl"));
     dispShader.compile(slurp3(dir + "/rd_display.vert.glsl"),
                        slurp3(dir + "/rd_display.frag.glsl"));
-
     for (auto* t : {&texA, &texB}) {
       t->filter(Texture::LINEAR);
       t->wrap(Texture::REPEAT);
@@ -330,8 +339,8 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 
   void onAnimate(double dt_) override {
     if (isPrimary()) {
-      // ── Auto-reset (disabled in stage three) ───────────────────────────
-      if (camState != CamState::STAGE_THREE) {
+      // ── Auto-reset (disabled in stage three and four) ─────────────────
+      if (camState != CamState::STAGE_THREE && camState != CamState::STAGE_FOUR) {
         resetTimer += dt_;
         if (resetTimer >= AUTO_RESET_INTERVAL) {
           resetTimer = 0.0;
@@ -348,8 +357,8 @@ struct MyApp : public DistributedAppWithState<WorldState> {
                      5.f * std::sin(2.8f * tta),
                      6.f * std::sin(tta));
 
-      // ── Drum onset → palette trigger (disabled in stage three) ─────────
-      if (camState != CamState::STAGE_THREE) {
+      // ── Drum onset → palette trigger (disabled in stage three+four) ────
+      if (camState != CamState::STAGE_THREE && camState != CamState::STAGE_FOUR) {
         while (nextOnsetIdx < drumOnsets.size() &&
                playbackSec >= drumOnsets[nextOnsetIdx]) {
           p_palette = (p_palette + 1) % int(palettes.size());
@@ -365,16 +374,19 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       float gainTarget = 0.f;
       switch (camState) {
         case CamState::ENTERING:
-          gainTarget = -6.f + 18.f * std::min(stateTimer / TRANSITION_FROM_OUTSIDE_TO_CENTER, 1.f);
+          gainTarget = -3.f + 9.f * std::min(stateTimer / TRANSITION_FROM_OUTSIDE_TO_CENTER, 1.f);
           break;
         case CamState::AT_CENTER:
         case CamState::ROTATING:
         case CamState::SLOW_ROTATE:
         case CamState::STAGE_THREE:
-          gainTarget = 12.f;
+          gainTarget = 6.f;
           break;
         case CamState::EXITING:
-          gainTarget = 12.f - 18.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
+          gainTarget = 6.f - 12.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
+          break;
+        case CamState::STAGE_FOUR:
+          gainTarget = 6.f - 66.f * stageProgress;  // 6 dB → -60 dB
           break;
       }
       p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * std::min(1.f, float(dt_) * 5.f);
@@ -392,8 +404,6 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       state().simDt        = p_simDt;
       state().dispScale    = p_dispScale;
     } else {
-      nav().set(state().camera);
-
       if (state().resetCount != lastResetCount) {
         lastResetCount = state().resetCount;
         initSim(lastResetCount);
@@ -449,7 +459,6 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       }
 
       case CamState::STAGE_THREE: {
-        // Camera stays at center, continues slow rotation indefinitely
         nav().pos(0.f, 0.f, 0.f);
         slowAngle += SLOW_ROTATION_SPEED * float(dt_);
         float cosA = std::cos(slowAngle), sinA = std::sin(slowAngle);
@@ -457,7 +466,26 @@ struct MyApp : public DistributedAppWithState<WorldState> {
                    0.f,
                   -entryDir.x * sinA + entryDir.z * cosA);
         nav().faceToward(look * 10.f);
-        // no exit — this is the final stage
+        if (stateTimer >= STAGE_THREE_DURATION) {
+          stateTimer    = 0.f;
+          stageProgress = 0.f;
+          camState      = CamState::STAGE_FOUR;
+          if (isPrimary()) {
+            state().resetCount++;
+            initSim(state().resetCount);
+          }
+        }
+        break;
+      }
+
+      case CamState::STAGE_FOUR: {
+        nav().pos(0.f, 0.f, 0.f);
+        slowAngle += SLOW_ROTATION_SPEED/2 * float(dt_);
+        float cosA = std::cos(slowAngle), sinA = std::sin(slowAngle);
+        Vec3f look(entryDir.x * cosA + entryDir.z * sinA,
+                   0.f,
+                  -entryDir.x * sinA + entryDir.z * cosA);
+        nav().faceToward(look * 10.f);
         break;
       }
 
@@ -493,6 +521,25 @@ struct MyApp : public DistributedAppWithState<WorldState> {
         }
         break;
       }
+    }
+
+    // ── Sync stageProgress: primary computes and broadcasts, renderers receive
+    if (isPrimary()) {
+      if (camState == CamState::STAGE_FOUR)
+        stageProgress = std::min(stateTimer / STAGE_FOUR_DURATION, 1.f);
+      else
+        stageProgress = 0.f;
+
+      state().stageProgress = stageProgress;
+      
+      if (camState == CamState::STAGE_FOUR && stageProgress >= 1.f && float(p_gainDB) <= -11.9f)
+        quit();
+    } else {
+      nav().set(state().camera);   // applied after camera SM — synced position always wins
+      stageProgress = state().stageProgress;
+
+      if (stageProgress >= 1.f)
+        quit();
     }
   }
 
@@ -534,23 +581,25 @@ struct MyApp : public DistributedAppWithState<WorldState> {
     g.popFramebuffer();
 
     // ── Display pass ─────────────────────────────────────────────────────
+    Texture&       rdTex = pingA ? texA : texB;
+    const Palette& pal   = palettes[state().paletteIndex];
+
     g.clear(0.f, 0.f, 0.f);
     g.depthTesting(true);
     g.blending(false);
     glDisable(GL_CULL_FACE);
 
-    Texture&       rdTex = pingA ? texA : texB;
-    const Palette& pal   = palettes[state().paletteIndex];
-
     rdTex.bind(0);
     g.shader(dispShader);
-    g.shader().uniform("u_texture",   0);
-    g.shader().uniform("u_colorA",    pal.a);
-    g.shader().uniform("u_colorB",    pal.b);
-    g.shader().uniform("u_colorBg",   pal.bg);
-    g.shader().uniform("u_dispScale", dispScale);
-    g.shader().uniform("u_eyeSep", lens().eyeSep() * g.eye() * 0.5f);
-    g.shader().uniform("u_focLen", lens().focalLength());
+    g.shader().uniform("u_texture",    0);
+    g.shader().uniform("u_colorA",     pal.a);
+    g.shader().uniform("u_colorB",     pal.b);
+    g.shader().uniform("u_colorBg",    pal.bg);
+    g.shader().uniform("u_dispScale",  dispScale);
+    g.shader().uniform("u_eyeSep",     lens().eyeSep() * g.eye() * 0.5f);
+    g.shader().uniform("u_focLen",     lens().focalLength());
+    g.shader().uniform("u_blur",       stageProgress * 0.012f);
+    g.shader().uniform("u_brightness", 1.f + stageProgress * stageProgress * 20.f);
     g.draw(gridMesh);
     rdTex.unbind(0);
   }
@@ -568,13 +617,34 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       p_palette = (p_palette + 1) % int(palettes.size());
       return true;
     }
+    // ── Debug: jump to stage three / four ────────────────────────────────
+    if (kb.key() == '3') {
+      stateTimer = 0.f;
+      slowAngle  = 0.f;
+      p_palette  = STAGE_THREE_PALETTE;
+      camState   = CamState::STAGE_THREE;
+      return true;
+    }
+    if (kb.key() == '4') {
+      stateTimer    = 0.f;
+      stageProgress = 0.f;
+      state().resetCount++;
+      initSim(state().resetCount);
+      camState = CamState::STAGE_FOUR;
+      return true;
+    }
     return false;
   }
 };
 
 int main() {
   MyApp app;
-  app.configureAudio(44100, 512, 60, 0);
+  // Allosphere
+  //app.configureAudio(44100, 512, 60, 0);
+  
+  // Stereo
+  app.configureAudio(44100, 512, 2, 0);
+
   gam::sampleRate(44100);
   app.start();
 }
