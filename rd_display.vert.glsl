@@ -3,7 +3,7 @@
 // Spherical tessellation with equirectangular UV.
 // Seamless and continuous — no face seams. Slight polar distortion is
 // acceptable from inside the Allosphere (audience looks forward, not straight up).
-// SPHERE_LAT and SPHERE_LON must match the constants in 6.cpp.
+// SPHERE_LAT and SPHERE_LON must match the constants in 1.cpp.
 
 uniform mat4 al_ModelViewMatrix;
 uniform mat4 al_ProjectionMatrix;

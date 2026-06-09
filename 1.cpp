@@ -15,6 +15,7 @@
 #include "al/math/al_Random.hpp"
 #include "al/sound/al_SoundFile.hpp"
 #include "al/sound/al_Lbap.hpp"
+#include "al/sound/al_Vbap.hpp"
 #include "al/sound/al_Speaker.hpp"
 #include "al/sound/al_StereoPanner.hpp"
 #include "al/sphere/al_AlloSphereSpeakerLayout.hpp"
@@ -228,7 +229,7 @@ struct MyApp : public DistributedAppWithState<WorldState> {
       // spatializer   = new Lbap(speakerLayout);
       if (al::sphere::isSphereMachine()) {
         speakerLayout = AlloSphereSpeakerLayoutCompensated();
-        spatializer   = new Lbap(speakerLayout);
+        spatializer   = new Vbap(speakerLayout);
       } else {
         // ── Stereo development ─────────────────────────────────────────────
         speakerLayout = StereoSpeakerLayout();
@@ -439,7 +440,6 @@ struct MyApp : public DistributedAppWithState<WorldState> {
           gainTarget = 6.f - 12.f * std::min(stateTimer / TRANSITION_FROM_CENTER_TO_OUTSIDE, 1.f);
           break;
         case CamState::STAGE_FOUR:
-          //gainTarget = 6.f - 66.f * stageProgress;  // 6 dB → -60 dB
           break;
       }
       p_gainDB = float(p_gainDB) + (gainTarget - float(p_gainDB)) * std::min(1.f, float(dt_) * 5.f);
@@ -694,12 +694,11 @@ struct MyApp : public DistributedAppWithState<WorldState> {
 
 int main() {
   MyApp app;
-  // Allosphere
-  app.configureAudio(48000, 512, 60, 0);
-  
-  // Stereo
-  //app.configureAudio(44100, 512, 2, 0);
-
+  if (al::sphere::isSphereMachine()) {
+    app.configureAudio(48000, 512, 60, 0);
+  } else {
+    app.configureAudio(48000, 512, 2, 0);
+  }
   gam::sampleRate(48000);
   app.start();
 }
