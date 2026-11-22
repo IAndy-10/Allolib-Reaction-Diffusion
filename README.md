@@ -116,3 +116,9 @@ The GUI also exposes the simulation parameters (feed, kill, diffusion rates, tim
 The initial GLSL was incompatible with Allolib's distributed rendering context and required manual debugging with lab support. Generated code was reviewed and corrected against the actual deployment environment.
 
 The README was later revised with Claude Code (Claude Opus 5.5), checked against the code.
+
+---
+
+## License
+
+The code and shaders are [MIT](LICENSE) © 2026 Italo Rojas. The license does not cover *Continuum 1* by Nala Sinephro or its stems, which belong to their rights holders and are not included in this repository.
